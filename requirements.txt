@@ -1,0 +1,4 @@
+# Binance DCA Bot Requirements
+ccxt>=4.0.0
+pandas>=2.0.0
+requests>=2.28.0
