@@ -1,329 +1,270 @@
 """
-Binance DCA Bot - Main Bot Logic
-=================================
-บอท DCA อัตโนมัติสำหรับ Binance
-รักษาเงินต้นด้วย Stop-loss และ Take-profit
-
-วิธีใช้:
-1. แก้ไข config.py ใส่ API Key
-2. รัน: python bot.py
+Binance DCA Bot - Main Script
+==============================
+บอท DCA อัตโนมัติ พร้อมระบบป้องกันความเสี่ยง
 """
 
 import ccxt
-import pandas as pd
 import time
+import csv
 import os
 from datetime import datetime, timedelta
 from config import *
 
 class DCABot:
     def __init__(self):
-        """Initialize the bot"""
+        print("🤖 เริ่มต้น DCA Bot...")
+        
+        # เชื่อมต่อ Binance
         self.exchange = ccxt.binance({
             'apiKey': API_KEY,
             'secret': API_SECRET,
-            'sandbox': PAPER_TRADING,  # Testnet mode
+            'sandbox': PAPER_TRADING,  # ใช้ testnet ถ้าเป็น paper trading
             'options': {
                 'defaultType': 'spot'
             }
         })
         
-        # ถ้าเป็น paper trading ใช้ testnet
         if PAPER_TRADING:
+            print("📝 โหมด Paper Trading (ไม่ใช้เงินจริง)")
             self.exchange.set_sandbox_mode(True)
-            print("🧪 โหมดทดสอบ (Paper Trading) - ไม่ใช้เงินจริง")
         else:
-            print("💰 โหมดใช้เงินจริง - ระวัง!")
+            print("💰 โหมด Live Trading (ใช้เงินจริง!)")
         
-        self.symbol = SYMBOL
-        self.total_spent = 0
+        # State
+        self.total_invested = 0
         self.total_coins = 0
-        self.trades = []
+        self.average_buy_price = 0
         self.last_buy_time = None
         self.last_buy_price = None
-        self.average_price = 0
+        self.trades = []
         
-        # โหลดประวัติการเทรด
-        self.load_history()
-    
-    def load_history(self):
-        """โหลดประวัติการเทรดจากไฟล์"""
-        if os.path.exists(LOG_FILE):
-            try:
-                df = pd.read_csv(LOG_FILE)
-                if not df.empty:
-                    self.total_spent = df[df['type'] == 'BUY']['amount_usdt'].sum()
-                    self.total_coins = df[df['type'] == 'BUY']['amount_coin'].sum() - \
-                                       df[df['type'] == 'SELL']['amount_coin'].sum()
-                    if self.total_coins > 0:
-                        self.average_price = self.total_spent / self.total_coins
-                    last_buy = df[df['type'] == 'BUY'].iloc[-1] if len(df[df['type'] == 'BUY']) > 0 else None
-                    if last_buy is not None:
-                        self.last_buy_price = last_buy['price']
-                        self.last_buy_time = datetime.fromisoformat(last_buy['timestamp'])
-                    print(f"📂 โหลดประวัติ: ใช้ไป {self.total_spent:.2f} USDT, ถือ {self.total_coins:.8f} coins")
-            except Exception as e:
-                print(f"⚠️ ไม่สามารถโหลดประวัติ: {e}")
-    
-    def save_trade(self, trade_type, price, amount_usdt, amount_coin, reason=""):
-        """บันทึกการเทรด"""
-        trade = {
-            'timestamp': datetime.now().isoformat(),
-            'type': trade_type,
-            'symbol': self.symbol,
-            'price': price,
-            'amount_usdt': amount_usdt,
-            'amount_coin': amount_coin,
-            'reason': reason,
-            'total_spent': self.total_spent,
-            'total_coins': self.total_coins,
-            'average_price': self.average_price
-        }
-        self.trades.append(trade)
+        # โหลดข้อมูลเก่า
+        self.load_state()
         
-        # เขียนลงไฟล์
-        df = pd.DataFrame([trade])
-        df.to_csv(LOG_FILE, mode='a', header=not os.path.exists(LOG_FILE), index=False)
-        
-        return trade
+    def load_state(self):
+        """โหลดข้อมูลจากไฟล์"""
+        state_file = "bot_state.txt"
+        if os.path.exists(state_file):
+            with open(state_file, 'r') as f:
+                lines = f.readlines()
+                for line in lines:
+                    key, value = line.strip().split('=')
+                    if key == 'total_invested':
+                        self.total_invested = float(value)
+                    elif key == 'total_coins':
+                        self.total_coins = float(value)
+                    elif key == 'average_buy_price':
+                        self.average_buy_price = float(value)
+                    elif key == 'last_buy_price':
+                        self.last_buy_price = float(value) if value != 'None' else None
+            print(f"📂 โหลดข้อมูลเก่า: ลงทุนแล้ว ${self.total_invested:.2f}, ถือ {self.total_coins:.8f} coins")
     
-    def get_current_price(self):
+    def save_state(self):
+        """บันทึกข้อมูล"""
+        with open("bot_state.txt", 'w') as f:
+            f.write(f"total_invested={self.total_invested}\n")
+            f.write(f"total_coins={self.total_coins}\n")
+            f.write(f"average_buy_price={self.average_buy_price}\n")
+            f.write(f"last_buy_price={self.last_buy_price}\n")
+    
+    def get_price(self):
         """ดึงราคาปัจจุบัน"""
-        ticker = self.exchange.fetch_ticker(self.symbol)
+        ticker = self.exchange.fetch_ticker(SYMBOL)
         return ticker['last']
     
     def get_balance(self):
         """ดึงยอดเงินคงเหลือ"""
         balance = self.exchange.fetch_balance()
         usdt = balance['USDT']['free'] if 'USDT' in balance else 0
-        coin = self.symbol.split('/')[0]
+        coin = SYMBOL.split('/')[0]
         coin_balance = balance[coin]['free'] if coin in balance else 0
         return usdt, coin_balance
+    
+    def log_trade(self, action, price, amount, total, reason):
+        """บันทึก log การเทรด"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # เขียนลงไฟล์
+        file_exists = os.path.exists(LOG_FILE)
+        with open(LOG_FILE, 'a', newline='') as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                writer.writerow(['timestamp', 'action', 'price', 'amount', 'total_usdt', 'reason', 'total_invested', 'total_coins', 'avg_price'])
+            writer.writerow([timestamp, action, price, amount, total, reason, self.total_invested, self.total_coins, self.average_buy_price])
+        
+        # แสดงผล
+        emoji = "📈" if action == "BUY" else "📉"
+        print(f"{emoji} [{timestamp}] {action}: {amount:.8f} @ ${price:.2f} = ${total:.2f} ({reason})")
     
     def buy(self, amount_usdt, reason="DCA"):
         """ซื้อเหรียญ"""
         try:
-            price = self.get_current_price()
-            amount_coin = amount_usdt / price
+            price = self.get_price()
+            coin_amount = amount_usdt / price
             
-            if not PAPER_TRADING:
-                # สั่งซื้อจริง
-                order = self.exchange.create_market_buy_order(
-                    self.symbol,
-                    amount_coin
-                )
-                price = order['average'] or price
-                amount_coin = order['filled']
-                amount_usdt = order['cost']
+            if PAPER_TRADING:
+                # Paper trading - จำลองการซื้อ
+                print(f"📝 [Paper] ซื้อ {coin_amount:.8f} @ ${price:.2f}")
+            else:
+                # Live trading
+                order = self.exchange.create_market_buy_order(SYMBOL, coin_amount)
+                coin_amount = order['filled']
+                price = order['average']
             
-            # อัพเดทสถิติ
-            self.total_spent += amount_usdt
-            self.total_coins += amount_coin
-            self.average_price = self.total_spent / self.total_coins if self.total_coins > 0 else 0
-            self.last_buy_price = price
+            # อัพเดท state
+            self.total_invested += amount_usdt
+            self.total_coins += coin_amount
+            self.average_buy_price = self.total_invested / self.total_coins if self.total_coins > 0 else 0
             self.last_buy_time = datetime.now()
+            self.last_buy_price = price
             
-            # บันทึก
-            trade = self.save_trade('BUY', price, amount_usdt, amount_coin, reason)
+            self.log_trade("BUY", price, coin_amount, amount_usdt, reason)
+            self.save_state()
             
-            print(f"✅ ซื้อ! ราคา: {price:.2f} USDT | จำนวน: {amount_coin:.8f} | เหตุผล: {reason}")
-            print(f"   📊 รวมใช้ไป: {self.total_spent:.2f} USDT | ถือ: {self.total_coins:.8f} | เฉลี่ย: {self.average_price:.2f}")
-            
-            self.notify(f"🟢 ซื้อ {self.symbol}\nราคา: {price:.2f}\nจำนวน: {amount_coin:.8f}\nเหตุผล: {reason}")
-            
-            return trade
+            return True
             
         except Exception as e:
             print(f"❌ ซื้อไม่สำเร็จ: {e}")
-            return None
+            return False
     
-    def sell(self, percentage, reason=""):
+    def sell(self, percentage, reason="Take Profit"):
         """ขายเหรียญ"""
         try:
             if self.total_coins <= 0:
                 print("⚠️ ไม่มีเหรียญให้ขาย")
-                return None
+                return False
             
-            price = self.get_current_price()
-            amount_coin = self.total_coins * (percentage / 100)
-            amount_usdt = amount_coin * price
+            price = self.get_price()
+            sell_amount = self.total_coins * (percentage / 100)
+            usdt_received = sell_amount * price
             
-            if not PAPER_TRADING:
-                # สั่งขายจริง
-                order = self.exchange.create_market_sell_order(
-                    self.symbol,
-                    amount_coin
-                )
-                price = order['average'] or price
-                amount_coin = order['filled']
-                amount_usdt = order['cost']
+            if PAPER_TRADING:
+                print(f"📝 [Paper] ขาย {sell_amount:.8f} @ ${price:.2f}")
+            else:
+                order = self.exchange.create_market_sell_order(SYMBOL, sell_amount)
+                sell_amount = order['filled']
+                usdt_received = order['cost']
             
-            # อัพเดทสถิติ
-            self.total_coins -= amount_coin
+            # อัพเดท state
+            cost_basis = sell_amount * self.average_buy_price
+            profit = usdt_received - cost_basis
             
-            # บันทึก
-            trade = self.save_trade('SELL', price, amount_usdt, amount_coin, reason)
+            self.total_coins -= sell_amount
+            self.total_invested -= cost_basis
             
-            # คำนวณกำไร/ขาดทุน
-            cost_basis = amount_coin * self.average_price
-            pnl = amount_usdt - cost_basis
-            pnl_percent = (pnl / cost_basis) * 100 if cost_basis > 0 else 0
+            self.log_trade("SELL", price, sell_amount, usdt_received, f"{reason} (P/L: ${profit:.2f})")
+            self.save_state()
             
-            emoji = "🟢" if pnl >= 0 else "🔴"
-            print(f"✅ ขาย! ราคา: {price:.2f} USDT | จำนวน: {amount_coin:.8f} | เหตุผล: {reason}")
-            print(f"   {emoji} P/L: {pnl:.2f} USDT ({pnl_percent:.1f}%)")
-            
-            self.notify(f"🔴 ขาย {self.symbol}\nราคา: {price:.2f}\nจำนวน: {amount_coin:.8f}\n{emoji} P/L: {pnl:.2f} USDT ({pnl_percent:.1f}%)\nเหตุผล: {reason}")
-            
-            return trade
+            return True
             
         except Exception as e:
             print(f"❌ ขายไม่สำเร็จ: {e}")
-            return None
-    
-    def check_dca_time(self):
-        """เช็คว่าถึงเวลา DCA หรือยัง"""
-        if self.last_buy_time is None:
-            return True
-        
-        next_buy_time = self.last_buy_time + timedelta(hours=DCA_INTERVAL_HOURS)
-        return datetime.now() >= next_buy_time
-    
-    def check_dip_buy(self, current_price):
-        """เช็คว่าราคาลงพอที่จะซื้อเพิ่มหรือไม่"""
-        if self.last_buy_price is None:
             return False
+    
+    def check_signals(self):
+        """ตรวจสอบสัญญาณซื้อ/ขาย"""
+        price = self.get_price()
+        now = datetime.now()
         
-        drop_percent = ((self.last_buy_price - current_price) / self.last_buy_price) * 100
-        return drop_percent >= DIP_BUY_PERCENTAGE
-    
-    def check_stop_loss(self, current_price):
-        """เช็ค Stop Loss"""
-        if self.average_price <= 0 or self.total_coins <= 0:
-            return False
+        print(f"\n💹 ราคาปัจจุบัน: ${price:.2f}")
+        print(f"💰 ลงทุนแล้ว: ${self.total_invested:.2f} / ${TOTAL_BUDGET}")
+        print(f"🪙 ถือเหรียญ: {self.total_coins:.8f}")
+        print(f"📊 ราคาเฉลี่ยที่ซื้อ: ${self.average_buy_price:.2f}")
         
-        loss_percent = ((self.average_price - current_price) / self.average_price) * 100
-        return loss_percent >= STOP_LOSS_PERCENTAGE
-    
-    def check_take_profit(self, current_price):
-        """เช็ค Take Profit"""
-        if self.average_price <= 0 or self.total_coins <= 0:
-            return False
-        
-        profit_percent = ((current_price - self.average_price) / self.average_price) * 100
-        return profit_percent >= TAKE_PROFIT_PERCENTAGE
-    
-    def check_budget(self):
-        """เช็คว่ายังมีงบเหลือหรือไม่"""
-        return self.total_spent < TOTAL_BUDGET
-    
-    def notify(self, message):
-        """ส่งแจ้งเตือน Telegram"""
-        if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
-            try:
-                import requests
-                url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-                requests.post(url, data={'chat_id': TELEGRAM_CHAT_ID, 'text': message})
-            except:
-                pass
-    
-    def print_status(self, current_price):
-        """แสดงสถานะปัจจุบัน"""
         if self.total_coins > 0:
-            current_value = self.total_coins * current_price
-            pnl = current_value - self.total_spent
-            pnl_percent = (pnl / self.total_spent) * 100 if self.total_spent > 0 else 0
-            emoji = "🟢" if pnl >= 0 else "🔴"
+            current_value = self.total_coins * price
+            profit_loss = current_value - self.total_invested
+            profit_pct = (profit_loss / self.total_invested * 100) if self.total_invested > 0 else 0
+            print(f"💵 มูลค่าปัจจุบัน: ${current_value:.2f} ({profit_pct:+.2f}%)")
+        
+        # ===== CHECK STOP LOSS =====
+        if self.total_coins > 0 and self.average_buy_price > 0:
+            loss_pct = ((self.average_buy_price - price) / self.average_buy_price) * 100
+            if loss_pct >= STOP_LOSS_PERCENTAGE:
+                print(f"🚨 STOP LOSS! ขาดทุน {loss_pct:.2f}%")
+                self.sell(100, f"Stop Loss ({loss_pct:.2f}%)")
+                return
+        
+        # ===== CHECK TAKE PROFIT =====
+        if self.total_coins > 0 and self.average_buy_price > 0:
+            profit_pct = ((price - self.average_buy_price) / self.average_buy_price) * 100
+            if profit_pct >= TAKE_PROFIT_PERCENTAGE:
+                print(f"🎉 TAKE PROFIT! กำไร {profit_pct:.2f}%")
+                self.sell(TAKE_PROFIT_SELL_PERCENTAGE, f"Take Profit ({profit_pct:.2f}%)")
+                return
+        
+        # ===== CHECK BUDGET =====
+        if self.total_invested >= TOTAL_BUDGET:
+            print("⚠️ ใช้งบหมดแล้ว รอ Take Profit หรือ Stop Loss")
+            return
+        
+        # ===== DCA BUY =====
+        should_buy = False
+        buy_amount = BUY_AMOUNT
+        reason = "DCA"
+        
+        # เช็คเวลา DCA
+        if self.last_buy_time is None:
+            should_buy = True
+            reason = "First Buy"
+        elif (now - self.last_buy_time) >= timedelta(hours=DCA_INTERVAL_HOURS):
+            should_buy = True
+            reason = "DCA Schedule"
+        
+        # เช็ค Dip Buy
+        if self.last_buy_price and not should_buy:
+            dip_pct = ((self.last_buy_price - price) / self.last_buy_price) * 100
+            if dip_pct >= DIP_BUY_PERCENTAGE:
+                should_buy = True
+                buy_amount = BUY_AMOUNT * DIP_BUY_MULTIPLIER
+                reason = f"Dip Buy ({dip_pct:.2f}%)"
+        
+        # ซื้อ
+        if should_buy:
+            remaining_budget = TOTAL_BUDGET - self.total_invested
+            buy_amount = min(buy_amount, remaining_budget)
             
-            print(f"\n{'='*50}")
-            print(f"📊 สถานะปัจจุบัน - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-            print(f"{'='*50}")
-            print(f"💰 ราคา {self.symbol}: {current_price:.2f} USDT")
-            print(f"📈 ราคาเฉลี่ยที่ซื้อ: {self.average_price:.2f} USDT")
-            print(f"🪙 จำนวนที่ถือ: {self.total_coins:.8f}")
-            print(f"💵 ใช้ไปแล้ว: {self.total_spent:.2f} / {TOTAL_BUDGET} USDT")
-            print(f"💎 มูลค่าปัจจุบัน: {current_value:.2f} USDT")
-            print(f"{emoji} กำไร/ขาดทุน: {pnl:.2f} USDT ({pnl_percent:.1f}%)")
-            print(f"{'='*50}\n")
+            if buy_amount >= 10:  # Binance minimum
+                self.buy(buy_amount, reason)
+            else:
+                print("⚠️ งบไม่พอสำหรับการซื้อขั้นต่ำ")
         else:
-            print(f"\n📊 ราคา {self.symbol}: {current_price:.2f} USDT | ยังไม่มีการซื้อ\n")
+            print("⏳ รอสัญญาณซื้อ...")
     
     def run(self):
-        """รันบอท"""
-        print(f"""
-╔══════════════════════════════════════════════════╗
-║           🤖 Binance DCA Bot v1.0                ║
-║          รักษาเงินต้น + สร้างกำไร                  ║
-╚══════════════════════════════════════════════════╝
+        """รันบอทต่อเนื่อง"""
+        print("\n" + "="*50)
+        print("🚀 DCA Bot เริ่มทำงาน!")
+        print(f"📊 เทรดคู่: {SYMBOL}")
+        print(f"💵 งบทั้งหมด: ${TOTAL_BUDGET}")
+        print(f"⏰ DCA ทุก: {DCA_INTERVAL_HOURS} ชั่วโมง")
+        print("="*50)
         
-⚙️ การตั้งค่า:
-   • เหรียญ: {SYMBOL}
-   • งบประมาณ: {TOTAL_BUDGET} USDT
-   • ซื้อครั้งละ: {BUY_AMOUNT} USDT
-   • DCA ทุกๆ: {DCA_INTERVAL_HOURS} ชั่วโมง
-   • Stop Loss: {STOP_LOSS_PERCENTAGE}%
-   • Take Profit: {TAKE_PROFIT_PERCENTAGE}%
-   • Paper Trading: {'✅ เปิด' if PAPER_TRADING else '❌ ปิด (ใช้เงินจริง!)'}
-        """)
-        
-        print("🚀 เริ่มทำงาน... กด Ctrl+C เพื่อหยุด\n")
-        
-        check_interval = 60  # เช็คทุก 60 วินาที
-        status_interval = 300  # แสดงสถานะทุก 5 นาที
-        last_status_time = 0
-        
-        try:
-            while True:
-                current_price = self.get_current_price()
-                current_time = time.time()
+        while True:
+            try:
+                self.check_signals()
                 
-                # แสดงสถานะ
-                if current_time - last_status_time >= status_interval:
-                    self.print_status(current_price)
-                    last_status_time = current_time
+                # รอ 5 นาที แล้วเช็คอีกครั้ง
+                print(f"\n⏳ เช็คอีกครั้งใน 5 นาที...")
+                time.sleep(300)
                 
-                # 1. เช็ค Stop Loss ก่อน (สำคัญที่สุด!)
-                if self.check_stop_loss(current_price):
-                    print(f"🚨 STOP LOSS! ราคาลงถึง {STOP_LOSS_PERCENTAGE}%")
-                    self.sell(100, f"Stop Loss at {STOP_LOSS_PERCENTAGE}%")
-                    print("⏸️ หยุดบอท - รอดูสถานการณ์")
-                    break
-                
-                # 2. เช็ค Take Profit
-                if self.check_take_profit(current_price):
-                    print(f"🎉 TAKE PROFIT! ราคาขึ้นถึง {TAKE_PROFIT_PERCENTAGE}%")
-                    self.sell(TAKE_PROFIT_SELL_PERCENTAGE, f"Take Profit at {TAKE_PROFIT_PERCENTAGE}%")
-                
-                # 3. เช็คว่ายังมีงบเหลือ
-                if self.check_budget():
-                    
-                    # 3a. เช็คว่าราคาลงมาก → ซื้อเพิ่ม
-                    if self.check_dip_buy(current_price):
-                        dip_amount = BUY_AMOUNT * DIP_BUY_MULTIPLIER
-                        if self.total_spent + dip_amount <= TOTAL_BUDGET:
-                            print(f"📉 ราคาลง {DIP_BUY_PERCENTAGE}%! ซื้อเพิ่ม")
-                            self.buy(dip_amount, f"Dip Buy (-{DIP_BUY_PERCENTAGE}%)")
-                    
-                    # 3b. เช็คว่าถึงเวลา DCA หรือยัง
-                    elif self.check_dca_time():
-                        if self.total_spent + BUY_AMOUNT <= TOTAL_BUDGET:
-                            self.buy(BUY_AMOUNT, "Scheduled DCA")
-                        else:
-                            remaining = TOTAL_BUDGET - self.total_spent
-                            if remaining >= 5:  # ถ้าเหลือมากกว่า 5 USDT
-                                self.buy(remaining, "Final DCA (remaining budget)")
-                
-                else:
-                    # หมดงบแล้ว แค่รอ take profit หรือ stop loss
-                    pass
-                
-                time.sleep(check_interval)
-                
-        except KeyboardInterrupt:
-            print("\n\n⏹️ หยุดบอท")
-            self.print_status(self.get_current_price())
+            except KeyboardInterrupt:
+                print("\n👋 หยุดบอท...")
+                break
+            except Exception as e:
+                print(f"❌ Error: {e}")
+                time.sleep(60)
 
-
-if __name__ == "__main__":
+def main():
+    # เช็ค API Key
+    if API_KEY == "YOUR_API_KEY_HERE":
+        print("❌ กรุณาใส่ API Key ใน config.py ก่อน!")
+        print("📖 วิธีสร้าง: https://www.binance.com/en/my/settings/api-management")
+        return
+    
     bot = DCABot()
     bot.run()
+
+if __name__ == "__main__":
+    main()

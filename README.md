@@ -1,93 +1,91 @@
 # 🤖 Binance DCA Bot
 
-บอท DCA อัตโนมัติสำหรับ Binance - **รักษาเงินต้น + สร้างกำไร**
+บอท DCA อัตโนมัติสำหรับ Binance พร้อมระบบป้องกันความเสี่ยง
 
-## ✨ ฟีเจอร์
+## ✨ Features
 
-- ✅ **DCA อัตโนมัติ** - ซื้อสม่ำเสมอตามเวลาที่กำหนด
+- ✅ **DCA (Dollar Cost Averaging)** - ซื้อสม่ำเสมอตามเวลาที่กำหนด
 - ✅ **Dip Buying** - ซื้อเพิ่มเมื่อราคาลง
-- ✅ **Stop Loss** - ขายอัตโนมัติเมื่อขาดทุนถึงจุดที่ตั้ง
-- ✅ **Take Profit** - ขายทำกำไรเมื่อราคาขึ้น
+- ✅ **Stop Loss** - ขายอัตโนมัติเมื่อขาดทุนถึงจุดที่กำหนด
+- ✅ **Take Profit** - ขายอัตโนมัติเมื่อกำไรถึงเป้า
 - ✅ **Paper Trading** - ทดสอบโดยไม่ใช้เงินจริง
-- ✅ **บันทึกประวัติ** - เก็บ log ทุกการเทรด
-- ✅ **แจ้งเตือน Telegram** (optional)
+- ✅ **Trade Logging** - บันทึกการเทรดทั้งหมด
 
-## 📋 ความต้องการ
+## 🚀 วิธีใช้งาน
 
-- Python 3.8+
-- บัญชี Binance + API Key
-
-## 🚀 วิธีติดตั้ง
+### 1. ติดตั้ง Dependencies
 
 ```bash
-# 1. Clone repo
-git clone https://github.com/saridpong/crypto-bot.git
-cd crypto-bot
-
-# 2. ติดตั้ง dependencies
 pip install -r requirements.txt
-
-# 3. แก้ไข config.py
-nano config.py
 ```
 
-## ⚙️ การตั้งค่า (config.py)
+### 2. ตั้งค่า API Key
 
+1. ไปที่ [Binance API Management](https://www.binance.com/en/my/settings/api-management)
+2. สร้าง API Key ใหม่
+3. ⚠️ **เปิดแค่**:
+   - ✅ Enable Reading
+   - ✅ Enable Spot Trading
+4. ⛔ **อย่าเปิด**:
+   - ❌ Enable Withdrawals (อันตราย!)
+
+5. แก้ไขไฟล์ `config.py`:
 ```python
-# API Keys (จาก Binance)
-API_KEY = "your_api_key"
-API_SECRET = "your_api_secret"
-
-# เหรียญที่จะเทรด
-SYMBOL = "BTC/USDT"
-
-# งบประมาณ (USDT)
-TOTAL_BUDGET = 300  # ~10,000 บาท
-
-# ซื้อครั้งละ
-BUY_AMOUNT = 10  # USDT
-
-# ซื้อทุกๆ กี่ชั่วโมง
-DCA_INTERVAL_HOURS = 24
-
-# Stop Loss / Take Profit
-STOP_LOSS_PERCENTAGE = 15
-TAKE_PROFIT_PERCENTAGE = 30
-
-# โหมดทดสอบ
-PAPER_TRADING = True  # เปลี่ยนเป็น False เมื่อพร้อม
+API_KEY = "ใส่ API Key ของคุณ"
+API_SECRET = "ใส่ Secret Key ของคุณ"
 ```
 
-## ▶️ วิธีรัน
+### 3. ปรับแต่งค่า (config.py)
+
+| ค่า | คำอธิบาย | ค่าเริ่มต้น |
+|-----|----------|------------|
+| `SYMBOL` | คู่เทรด | BTC/USDT |
+| `TOTAL_BUDGET` | งบทั้งหมด (USDT) | 300 |
+| `BUY_AMOUNT` | ซื้อครั้งละ (USDT) | 10 |
+| `DCA_INTERVAL_HOURS` | ซื้อทุกกี่ชั่วโมง | 24 |
+| `DIP_BUY_PERCENTAGE` | ซื้อเพิ่มเมื่อลง % | 5 |
+| `STOP_LOSS_PERCENTAGE` | หยุดขาดทุนที่ % | 15 |
+| `TAKE_PROFIT_PERCENTAGE` | ทำกำไรที่ % | 30 |
+| `PAPER_TRADING` | โหมดทดสอบ | True |
+
+### 4. รันบอท
 
 ```bash
-# รันบอท
 python bot.py
-
-# รันใน background
-nohup python bot.py > bot.log 2>&1 &
 ```
 
-## 📊 กลยุทธ์
+## 📊 ตัวอย่างการทำงาน
 
 ```
-┌─────────────────────────────────────────────────┐
-│                  DCA Strategy                   │
-├─────────────────────────────────────────────────┤
-│  📅 ซื้อทุกวัน (หรือตามที่ตั้ง)                    │
-│  📉 ราคาลง 5%? → ซื้อเพิ่ม 2 เท่า                 │
-│  🛡️ ขาดทุน 15%? → Stop Loss (ขายหมด)           │
-│  🎯 กำไร 30%? → Take Profit (ขาย 50%)          │
-└─────────────────────────────────────────────────┘
+🤖 เริ่มต้น DCA Bot...
+📝 โหมด Paper Trading (ไม่ใช้เงินจริง)
+
+==================================================
+🚀 DCA Bot เริ่มทำงาน!
+📊 เทรดคู่: BTC/USDT
+💵 งบทั้งหมด: $300
+⏰ DCA ทุก: 24 ชั่วโมง
+==================================================
+
+💹 ราคาปัจจุบัน: $42,150.00
+💰 ลงทุนแล้ว: $0.00 / $300
+📈 [2024-01-15 10:30:00] BUY: 0.00023715 @ $42,150.00 = $10.00 (First Buy)
+
+⏳ เช็คอีกครั้งใน 5 นาที...
 ```
 
 ## ⚠️ คำเตือน
 
-- **ใช้เงินที่เสียได้เท่านั้น**
-- **เริ่มจาก Paper Trading ก่อนเสมอ**
-- **ไม่รับประกันกำไร** - การลงทุนมีความเสี่ยง
-- **เก็บ API Key ให้ดี** - อย่าเปิด Withdrawal permission
+1. **ทดสอบก่อนเสมอ** - เริ่มจาก `PAPER_TRADING = True`
+2. **ใช้เงินที่พร้อมเสีย** - Crypto มีความเสี่ยงสูง
+3. **อย่าเปิด Withdrawal** - ป้องกัน API Key ถูกขโมย
+4. **ไม่รับประกันกำไร** - ผลการเทรดในอดีตไม่ได้รับประกันอนาคต
 
-## 📝 License
+## 📁 ไฟล์ที่สร้าง
 
-MIT License - ใช้ได้ตามสบาย แต่ความเสี่ยงเป็นของคุณเอง!
+- `bot_state.txt` - บันทึกสถานะบอท
+- `trading_log.csv` - ประวัติการเทรด
+
+## 📜 License
+
+MIT - ใช้งานได้ฟรี แต่ความเสี่ยงเป็นของคุณเอง
